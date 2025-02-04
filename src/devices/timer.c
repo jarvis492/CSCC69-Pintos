@@ -43,7 +43,7 @@ static struct list sleeping_list;
 static struct lock sleeping_list_lock;
 
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
-   and registers the corresponding interrupt. */
+   and registers the corresponding interrupt, init lists as well. */
 void
 timer_init (void) 
 {
@@ -98,7 +98,7 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
-/* Function for sorting sleeping threads by wake-up time */
+/* Function for sorting sleeping_thread by wake-up time */
 bool sthread_time_comparator(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
     struct sleeping_thread *sa = list_entry(a, struct sleeping_thread, elem);
     struct sleeping_thread *sb = list_entry(b, struct sleeping_thread, elem);
@@ -114,6 +114,9 @@ timer_sleep (int64_t ticks)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
+
+  // structure to keep track of current thread, wake up time and 
+  // sema to wake it up with
   struct sleeping_thread st;
   st.t = thread_current();
   st.wake_up_time = timer_ticks() + ticks;

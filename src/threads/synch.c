@@ -327,7 +327,9 @@ struct semaphore_elem
     struct semaphore semaphore;         /* This semaphore. */
   };
 
-bool sema_priority_compare(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+/* Function for comparing semaphores by their waiters' priority time */
+bool sema_priority_compare(const struct list_elem *a, 
+                    const struct list_elem *b, void *aux UNUSED) {
     struct semaphore_elem *s1 = list_entry(a, struct semaphore_elem, elem);
     struct semaphore_elem *s2 = list_entry(b, struct semaphore_elem, elem);
     
