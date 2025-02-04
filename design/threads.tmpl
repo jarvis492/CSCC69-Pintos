@@ -8,9 +8,7 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Jarvis Yu <jarvis.yu@mail.utoronto.ca>
 
 ---- PRELIMINARIES ----
 
@@ -30,26 +28,52 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+/* Struct representing a sleeping thread */
+struct sleeping_thread {
+    struct thread *t;
+    int64_t wake_up_time;
+    struct list_elem elem;
+    struct semaphore sema;
+};
+/* List of all the sleeping threads */
+static struct list sleeping_list;
+
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe what happens in a call to timer_sleep(),
 >> including the effects of the timer interrupt handler.
+The function creates an instance sleeping_thread to keep track of the current thread,
+the desired wake up time and a new semaphore. The struct is then put into the sleeping_list 
+list in sorted order, and does sema_down on the new semaphore, waiting for sema_up. 
+The timer interrupt handler will then check the top item in sleeping_list, waking it up
+if its time. sleeping_list is sorted by wake up time, so top item will be closest wake up time.
 
 >> A3: What steps are taken to minimize the amount of time spent in
 >> the timer interrupt handler?
+Since we insert items into the sleeping_list by wake up time, the front item 
+will be closest wake up time, and we don't need to search the whole list.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: How are race conditions avoided when multiple threads call
 >> timer_sleep() simultaneously?
+We disable interrupts to prevent race conditions when accessing the sleeping_list. 
+We have to use interrupt disabling instead of locks here because sleeping_list
+can potentially be modified during an interrupt (in timer_interrupt) and,
+we need to prevent that.
 
 >> A5: How are race conditions avoided when a timer interrupt occurs
 >> during a call to timer_sleep()?
+We disable interrupts to prevent race conditions when accessing the sleeping_list.
 
 ---- RATIONALE ----
 
 >> A6: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
+I chose this design because it was the first design that came to mind.
+I thought that if I went with the simplest, easiest to think about and
+visualize design, debugging and managing all the necessary structs and
+extra members would be easiest, compared to a more sophisticated design.
 
              PRIORITY SCHEDULING
              ===================
@@ -59,33 +83,92 @@ FirstName LastName <email@domain.example>
 >> B1: Copy here the declaration of each new or changed `struct' or
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
+struct thread new/modified members:
+    int priority;                       /* Effective Priority. */
+    int original_priority;              /* Original Priority. */
+    struct list locks_held;             /* Locks held by this thread */
+    struct lock *waiting_lock;          /* The lock this thread is waiting for */
+    struct semaphore *waiting_sema;     /* The sema this thread is waiting for */
 
 >> B2: Explain the data structure used to track priority donation.
 >> Use ASCII art to diagram a nested donation.  (Alternately, submit a
 >> .png file.)
+The waiting_lock and locks_held members under the thread struct is 
+used track priority donation, as well as the holder member under the
+lock struct. 
+
+thread1:
+    - prio 33
+    - tries to aquire lock 1
+    - waiting_lock = lock 1 now
+    |
+    |
+thread2:
+    - locks_held contains lock 1
+    - prio 32, gets changed to 33 by donation
+    - waiting lock = lock 2
+    |
+    |
+thread3
+    - locks_held contains lock 2
+    - prio 32, gets changed to 33 by donation
+    - waiting lock = NULL, algo ends
 
 ---- ALGORITHMS ----
 
 >> B3: How do you ensure that the highest priority thread waiting for
 >> a lock, semaphore, or condition variable wakes up first?
+For semaphores, the waiters list (the list of threads waiting on this 
+semaphore) is sorted by priority, so when you do sema_up and it 
+chooses the front item, it will be the one with highest priority. Locks
+are built on top of semaphores, so this is the same for them. For 
+condition variable, its list of semaphores is sorted by the the 
+highest priority thread at the front of each semaphor's waiting 
+list, which in turn is also sorted by high priority thread.  
 
 >> B4: Describe the sequence of events when a call to lock_acquire()
->> causes a priority donation.  How is nested donation handled?
+>> causes a priority donation. How is nested donation handled?
+On a call to lock_acquire(), it begins searching the given locks
+holder. If the holder is not NULL (so some other thread owns the lock) 
+and the holders priority is less than the current threads priority, 
+it donates the current threads priority. It then checks the locks holders 
+waiting_lock member to see if it is waiting for another lock, repeating 
+the entire process if it is. 
 
 >> B5: Describe the sequence of events when lock_release() is called
 >> on a lock that a higher-priority thread is waiting for.
+On a call to lock_release() that a higher-priority thread is waiting for,
+it will look through the current threads locks_held member (removing 
+the lock we are releasing), choosing the lock with the largest 
+priority waiter and setting the current thread priority to that priority.
+After that, it then releases the lock and will allow the highest priority
+waiting thread to acquire the lock, yielding if that thread has higher 
+priority than the current thread.
 
 ---- SYNCHRONIZATION ----
 
 >> B6: Describe a potential race in thread_set_priority() and explain
 >> how your implementation avoids it.  Can you use a lock to avoid
 >> this race?
+A potential race might occur if a low prio thread calls 
+thread_set_priority to set their priority to high, then 
+another high prio thread also calls thread_set_priority and sets 
+their priority to low, depending on what executes in what order, the
+threads could yield to each other in different orders. This is avoided 
+by disabling interrupts during the execution of thread_set_priority.
+
+This cannot be avoided with a lock, since this is not an issue of a 
+shared resource, and we are not trying to prevent other threads from 
+accessing some variable. 
 
 ---- RATIONALE ----
 
 >> B7: Why did you choose this design?  In what ways is it superior to
 >> another design you considered?
-
+Again, I chose this design because it was the first design that came to mind.
+I thought that if I went with the simplest, easiest to think about and
+visualize design, debugging and managing all the necessary structs and
+extra members would be easiest, compared to a more sophisticated design.
 
                SURVEY QUESTIONS
                ================

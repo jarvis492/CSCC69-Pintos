@@ -1,0 +1,9 @@
+starting with mount:
+docker run --platform linux/amd64 --rm --name pintos -it -v "$(pwd):/pintos" thierrysans/pintos bash
+cd /pintos/src/threads/build
+make tests/threads/priority-change.result
+
+pintos -v -k -T 60 bochs -- -q run alarm-single
+docker exec -it pintos bash
+dumplist &all_list thread allelem
+
