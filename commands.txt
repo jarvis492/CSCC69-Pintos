@@ -1,9 +1,29 @@
 starting with mount:
 docker run --platform linux/amd64 --rm --name pintos -it -v "$(pwd):/pintos" thierrysans/pintos bash
 cd /pintos/src/threads/build
+
 make tests/threads/priority-change.result
 
 pintos -v -k -T 60 bochs -- -q run alarm-single
 docker exec -it pintos bash
 dumplist &all_list thread allelem
 
+pintos-gdb kernel.o
+debugpintos
+
+cd /pintos/src/userprog
+cd /pintos/src/userprog/build
+pintos -v -k -T 60 --qemu --filesys-size=2 -p tests/userprog/args-none -a args-none -- -q -f run args-none
+pintos -v -k -T 60 --qemu --filesys-size=2 -p tests/userprog/args-single -a args-single -- -q -f run 'args-single onearg'
+
+pintos -v -k -T 60 --qemu --filesys-size=2 -p tests/userprog/args-none -a args-none --gdb -- -q -f run args-none
+
+make tests/userprog/sc-bad-sp.result
+make tests/userprog/sc-boundary-2.result
+make tests/userprog/create-bad-ptr.result
+make tests/userprog/exec-missing.result
+make tests/userprog/wait-simple.result
+make tests/userprog/multi-child-fd.result 
+make tests/userprog/rox-simple.result
+make tests/userprog/multi-oom.result
+make tests/userprog/bad-read2.result

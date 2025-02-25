@@ -50,6 +50,13 @@ sema_init (struct semaphore *sema, unsigned value)
   list_init (&sema->waiters);
 }
 
+/* Function for comparing threads by priority time */
+bool thread_priority_compare_sema(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+  struct thread *t1 = list_entry(a, struct thread, sem_elem);
+  struct thread *t2 = list_entry(b, struct thread, sem_elem);
+  return t1->priority > t2->priority;  // Higher priority comes first
+}
+
 /* Down or "P" operation on a semaphore.  Waits for SEMA's value
    to become positive and then atomically decrements it.
 
@@ -69,7 +76,7 @@ sema_down (struct semaphore *sema)
   struct thread *cur = thread_current ();
   while (sema->value == 0) 
     {
-      list_insert_ordered (&sema->waiters, &cur->elem, thread_priority_compare, NULL);
+      list_insert_ordered (&sema->waiters, &cur->sem_elem, thread_priority_compare_sema, NULL);
       cur->waiting_sema = sema;
       thread_block ();
     }
@@ -120,7 +127,7 @@ sema_up (struct semaphore *sema)
   int flag = 0;
   if (!list_empty (&sema->waiters)) {
     struct thread *t = list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem);
+                                struct thread, sem_elem);
     thread_unblock (t);
     if (t->priority > c->priority) {
       flag = 1;
@@ -220,9 +227,9 @@ lock_acquire (struct lock *lock)
     it->holder->priority = cur->priority;
     
     if (it->holder->waiting_sema != NULL) {
-      list_remove(&it->holder->elem);
+      list_remove(&it->holder->sem_elem);
       list_insert_ordered(&it->holder->waiting_sema->waiters, 
-                          &it->holder->elem, thread_priority_compare, NULL);
+                          &it->holder->sem_elem, thread_priority_compare_sema, NULL);
     }
     if (it->holder->waiting_lock != NULL) { //we only have to donate priority for locks
       it = it->holder->waiting_lock;
@@ -266,13 +273,13 @@ bool lock_priority_compare(const struct list_elem *a, const struct list_elem *b,
     int val1 = 0;
     if (!list_empty(&l1->semaphore.waiters)) {
       struct thread * t1 = list_entry (list_front (&l1->semaphore.waiters),
-                                struct thread, elem);
+                                struct thread, sem_elem);
       val1 = t1->priority;
     }
     int val2 = 0;
     if (!list_empty(&l2->semaphore.waiters)) {
       struct thread *t2 = list_entry (list_front (&l2->semaphore.waiters),
-                                struct thread, elem);
+                                struct thread, sem_elem);
       val2 = t2->priority;
     }
     return val1 > val2;
@@ -299,7 +306,7 @@ lock_release (struct lock *lock)
                     lock_priority_compare, NULL), struct lock, elem);
       int maxPrio = cur->priority;
       if (!list_empty(&max_lock->semaphore.waiters)) {
-        maxPrio = list_entry(list_front(&max_lock->semaphore.waiters), struct thread, elem)->priority;
+        maxPrio = list_entry(list_front(&max_lock->semaphore.waiters), struct thread, sem_elem)->priority;
       }
       //printf("maxPrio: %d\n", maxPrio);
       cur->priority = maxPrio;
@@ -338,13 +345,13 @@ bool sema_priority_compare(const struct list_elem *a,
     int val1 = 0;
     if (!list_empty(&s1->semaphore.waiters)) {
       struct thread * t1 = list_entry (list_front (&s1->semaphore.waiters),
-                                struct thread, elem);
+                                struct thread, sem_elem);
       val1 = t1->priority;
     }
     int val2 = 0;
     if (!list_empty(&s2->semaphore.waiters)) {
       struct thread *t2 = list_entry (list_front (&s2->semaphore.waiters),
-                                struct thread, elem);
+                                struct thread, sem_elem);
       val2 = t2->priority;
     }           
     return val1 < val2; 

@@ -166,7 +166,9 @@ tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux) 
 {
+  struct thread *curr = thread_current();
   struct thread *t;
+  struct wait_status *w;
   struct kernel_thread_frame *kf;
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
@@ -179,6 +181,12 @@ thread_create (const char *name, int priority,
   if (t == NULL)
     return TID_ERROR;
 
+  w = palloc_get_page (PAL_ZERO);
+  if (w == NULL)
+  {
+    palloc_free_page (t);
+    return TID_ERROR;
+  }
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
@@ -197,6 +205,19 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+  /* Add child parent relations */
+  memset (w, 0, sizeof *w);
+  t->parent = curr;
+  t->wait_status = w;
+  w->exit_status = 0;
+  w->exited = false;
+  w->tid = tid;
+  w->has_waiter = false;
+  w->parent_dead = false;
+  sema_init(&w->wait_sema, 0);
+  list_push_back(&curr->children_statuses, &w->elem);
+  //printf("***parent name: %s, child is %s, tid: %d\n", curr->name, t->name, w->tid);
 
   /* Add to run queue. */
   thread_unblock (t);
@@ -275,6 +296,42 @@ tid_t
 thread_tid (void) 
 {
   return thread_current ()->tid;
+}
+
+/* Returns the thread with the given tid. */
+struct thread *get_thread (tid_t tid) 
+{
+  struct list_elem *e;
+
+  /* Iterate through the list of processes. */
+  for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) 
+  {
+      struct thread *t = list_entry(e, struct thread, allelem);
+      if (t->tid == tid)
+          return t;
+  }
+
+  return NULL;  /* Not found. */
+}
+
+/* Returns the child wait_status with the given tid. */
+struct wait_status *get_child_wait_status (tid_t tid) 
+{
+  struct list_elem *e;
+  struct thread *curr = thread_current();
+  /* Iterate through the list of wait_statuses. */
+  for (e = list_begin(&curr->children_statuses); e != list_end(&curr->children_statuses); e = list_next(e)) 
+  {
+      struct wait_status *w = list_entry(e, struct wait_status, elem);
+      //printf("***get child loop tid: %d\n", w->tid);
+      if (w->tid == tid)
+      {
+        //printf("***returned on: %d\n", w->tid);
+        return w;
+      }
+  }
+
+  return NULL;  /* Not found. */
 }
 
 /* Deschedules the current thread and destroys it.  Never
@@ -483,7 +540,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->original_priority = priority;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-
+  t->has_waiter = false;
+  t->exit_status = 0;
+  t->parent = NULL;
+  list_init(&t->children_statuses);
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -23,6 +24,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define MAX_FILES 128                   /* Max files open for a process*/
 
 /* A kernel thread or user process.
 
@@ -82,20 +84,28 @@ typedef int tid_t;
    blocked state is on a semaphore wait list. */
 struct thread
   {
-    /* Owned by thread.c. */
-    tid_t tid;                          /* Thread identifier. */
-    enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
-    uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Effective Priority. */
-    int original_priority;              /* Original Priority. */
-    struct list locks_held;             /* Locks held by this thread */
-    struct lock *waiting_lock;          /* The lock this thread is waiting for */
-    struct semaphore *waiting_sema;     /* The sema this thread is waiting for */
-    struct list_elem allelem;           /* List element for all threads list. */
+   /* Owned by thread.c. */
+   tid_t tid;                          /* Thread identifier. */
+   enum thread_status status;          /* Thread state. */
+   char name[16];                      /* Name (for debugging purposes). */
+   uint8_t *stack;                     /* Saved stack pointer. */
+   int priority;                       /* Effective Priority. */
+   int original_priority;              /* Original Priority. */
+   struct list locks_held;             /* Locks held by this thread */
+   struct lock *waiting_lock;          /* The lock this thread is waiting for */
+   struct semaphore *waiting_sema;     /* The sema this thread is waiting for */
+   struct list_elem allelem;           /* List element for all threads list. */
+   bool has_waiter;                    /* Some process is waiting on this thread */
+   int exit_status;                    /* Exit status. */
+   struct thread *parent;              /* Parent process*/
+   struct list children_statuses;      /* List of wait_statuses for children */
+   struct wait_status *wait_status;    /* Associated wait_status */
+   
+   struct list_elem elem;              /* List element for ready list. */
+   struct list_elem sem_elem;          /* List element for semaphores */
+   struct file *fd_table[MAX_FILES];   /* Store file descriptors per process */
 
-    /* Shared between thread.c and synch.c. */
-    struct list_elem elem;              /* List element. */
+   struct file *exec_file;              /* File pointer to executable of process */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -106,6 +116,18 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
+/* represents the status of a child process, meant to be use by 
+   process_wait to retrieve information about child processes even
+   after the child has terminated and wait on the child using wait_sema */
+struct wait_status {
+   tid_t tid;                            /* Thread identifier for associated child process. */
+   int exit_status;                      /* exit status of child process. */
+   bool exited;                          /* If child process has exited yet. */
+   struct semaphore wait_sema;           /* Semaphore for waiting on associated child process. */
+   struct list_elem elem;                /* List elem for children_statuses in parent thread */
+   bool has_waiter;                      /* Is being waited on. */
+   bool parent_dead;                     /* Parent has exited. Know if we need to clean up */
+};
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
@@ -125,6 +147,8 @@ void thread_unblock (struct thread *);
 
 struct thread *thread_current (void);
 tid_t thread_tid (void);
+struct thread *get_thread (tid_t tid);
+struct wait_status *get_child_wait_status (tid_t tid);
 const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;

@@ -8,9 +8,7 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Jarvis Yu <jarvis.yu@mail.utoronto.ca>
 
 ---- PRELIMINARIES ----
 
@@ -30,19 +28,66 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+#define MAX_FILES 128                   /* Max files open for a process*/
+
+struct thread
+  {
+   ... unchanged section above
+
+   bool has_waiter;                    /* Some process is waiting on this thread */
+   int exit_status;                    /* Exit status. */
+   struct thread *parent;              /* Parent process*/
+   struct list children_statuses;      /* List of wait_statuses for children */
+   struct wait_status *wait_status;    /* Associated wait_status */
+    
+   struct list_elem elem;              /* List element for ready list. */
+   struct list_elem sem_elem;          /* List element for semaphores */
+   struct file *fd_table[MAX_FILES];   /* Store file descriptors per process */
+
+   struct file *exec_file;             /* File pointer to executable of process */
+
+   ... unchanged section below
+  };
+
+/* represents the status of a child process, meant to be use by 
+   process_wait to retrieve information about child processes even
+   after the child has terminated and wait on the child using wait_sema */
+struct wait_status {
+   tid_t tid;                            /* Thread identifier for associated child process. */
+   int exit_status;                      /* exit status of child process. */
+   bool exited;                          /* If child process has exited yet. */
+   struct semaphore wait_sema;           /* Semaphore for waiting on associated child process. */
+   struct list_elem elem;                /* List elem for children_statuses in parent thread */
+   bool has_waiter;                      /* Is being waited on. */
+   bool parent_dead;                     /* Parent has exited. Know if we need to clean up */
+};
 ---- ALGORITHMS ----
 
 >> A2: Briefly describe how you implemented argument parsing.  How do
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
+Using the format described in the project documentation, the arguments are
+parsed from the given file name and pushed onto the stack in reverse order, 
+along with the other things like word alignment bytes, null sentinel pointers,
+and the addresses of the arguement. To avoid overflowing stack pages, a reasonable 
+limit of 64 arguments is set.
 
 ---- RATIONALE ----
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
+Pintos implements strtok_r() but not strtok() because strtok() uses an 
+internal pointer to keep track of its progress, which means that if 2 
+threads call strtok() at the same time, they could overwrite each other's 
+progress, leading to a race condition. 
 
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+1. It allows for more flexibility, as now the different shells can handle 
+different parsing and other features in the Unix approach.
+2. It simplifies the kernel, as now we do not have to do the work of
+separating the executable and arguement, saving time and complexity in
+the kernel. 
 
                  SYSTEM CALLS
                  ============
@@ -53,14 +98,61 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+#define MAX_FILES 128                   /* Max files open for a process*/
+
+struct thread
+  {
+   ... unchanged section above
+
+   bool has_waiter;                    /* Some process is waiting on this thread */
+   int exit_status;                    /* Exit status. */
+   struct thread *parent;              /* Parent process*/
+   struct list children_statuses;      /* List of wait_statuses for children */
+   struct wait_status *wait_status;    /* Associated wait_status */
+    
+   struct list_elem elem;              /* List element for ready list. */
+   struct list_elem sem_elem;          /* List element for semaphores */
+   struct file *fd_table[MAX_FILES];   /* Store file descriptors per process */
+
+   struct file *exec_file;             /* File pointer to executable of process */
+
+   ... unchanged section below
+  };
+
+/* represents the status of a child process, meant to be use by 
+   process_wait to retrieve information about child processes even
+   after the child has terminated and wait on the child using wait_sema */
+struct wait_status {
+   tid_t tid;                            /* Thread identifier for associated child process. */
+   int exit_status;                      /* exit status of child process. */
+   bool exited;                          /* If child process has exited yet. */
+   struct semaphore wait_sema;           /* Semaphore for waiting on associated child process. */
+   struct list_elem elem;                /* List elem for children_statuses in parent thread */
+   bool has_waiter;                      /* Is being waited on. */
+   bool parent_dead;                     /* Parent has exited. Know if we need to clean up. */
+};
+
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
 >> single process?
+They are unique within a single process, as asked for on the project 
+documentation. Each thread has its own fd table in the form of member
+struct file *fd_table[MAX_FILES], and each time you open a file, it 
+searches an open (non NULL) spot in the fd_table and returns the index
+of that spot as a fd (except 0 and 1 which are reserved).
 
 ---- ALGORITHMS ----
 
 >> B3: Describe your code for reading and writing user data from the
 >> kernel.
+Firstly, the stack pointer is checked for validity, and if it is valid,
+the system call number and arguments are all copied into variables for use
+(checking validity at each step of the way). For the read system call,
+specifically, the given buffer is checked for validity then if the fd 
+is STDIN_FILENO, we get the input from input_getc, otherwise we read from
+the file and put it into buffer. For the write syscall, we first validate 
+the buffer and then check if fd is STDOUT_FILENO, writing to console if so
+otherwise just writing to the given file.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
 >> to be copied from user space into the kernel.  What is the least
@@ -71,6 +163,13 @@ FirstName LastName <email@domain.example>
 
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
+The "wait" system call simply calls the process_wait function on the 
+given tid and returns the given exit status from process_wait.   
+process_wait itself takes advantage of the wait_status struct and 
+searches for the given child thread's wait_status, which will exist even
+if the child thread itself has exited, and waits on it. When the child 
+exits, process_wait is freed and performs some cleanup and returns the
+exit_status. 
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -86,12 +185,38 @@ FirstName LastName <email@domain.example>
 >> paragraphs, describe the strategy or strategies you adopted for
 >> managing these issues.  Give an example.
 
+During a system call, error check is done in a lot of places. Firstly, the 
+stack pointer then the locations of the syscall number are checked for validity. 
+From here, error checking is done when copying in arguments from the stack, 
+as the copy_in function checks each byte as we copy in args for validity. 
+The next place where error checking happens is in the system calls themselves, 
+as things like strings, buffers and other pointers are checked for valid 
+values as well before use. 
+
+Whenever a validity check is failed, exit is called leading to 
+process_exit being called where cleanup of things like locks and files
+are performed. 
+
+Going further, places where memory is allocated have checks for when 
+errors happen, and generally deallocate memory before returning to 
+ensure allocated resources are freed. For example, in exec, we allocate
+multiple copies of file_name to manipulate them freely, and in any 
+situation where we need to exit, we first deallocate the copies before
+returning.
+
 ---- SYNCHRONIZATION ----
 
 >> B7: The "exec" system call returns -1 if loading the new executable
 >> fails, so it cannot return before the new executable has completed
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
+The exec system call is prevented from returning using a semaphore.
+The process_execute function calls sema_down on the newly created 
+child's semaphore member (or more accurately, the wait_status 
+representing the child), which will be released when the child finishes
+loading or if the child exits anywhere along the process. the wait_status 
+also is updated with the child's exit status, so process_execute knows 
+if something went wrong and returns -1.
 
 >> B8: Consider parent process P with child process C.  How do you
 >> ensure proper synchronization and avoid race conditions when P
@@ -99,17 +224,46 @@ FirstName LastName <email@domain.example>
 >> that all resources are freed in each case?  How about when P
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
+In the case P calls wait(C) before C exits, process_wait will wait on
+the semaphore of the wait_status representing its child. The child will
+then up the semaphore when it exits, allowing the parent to access its 
+status through the wait_status, which is then cleaned up after. C will
+also clean up after itself in process_exit. 
+
+In the case P calls wait(C) after C exits, process_wait will wait on
+the semaphore of the wait_status representing its child. The child will
+have upped the semaphore when it exited, allowing things to progress as
+usual. 
+
+In the case P terminates first, the wait_statuses of its 
+exited children will all be cleaned up in process_exit, preventing leakage. 
+The children that are still running will clean up their wait_statuses 
+themselves when they exit after seeing that the parent_dead member is
+true on their wait_status. 
 
 ---- RATIONALE ----
 
 >> B9: Why did you choose to implement access to user memory from the
 >> kernel in the way that you did?
+I chose the simplest, quickest to think about solution for me. I 
+admittedly did not put as much thought into efficient/better design,
+however I believe going with the simplest to think about design and
+being able to work on it immedietly is also advantageous, so long as
+I already had a good idea of how I would implement everything as it 
+allowed me to work faster. 
 
 >> B10: What advantages or disadvantages can you see to your design
 >> for file descriptors?
+I think the main advantage is simplicity. The code is very easy to 
+understand and coming back to it to make changes or debug should be
+extremely easy. However, In order to search for a file in our fd table
+we have to travese potentially the whole table, which could be a problem
+if we decide to make the table able to grow larger or if we have to make 
+a lot of calls to the fd table for some reason. 
 
 >> B11: The default tid_t to pid_t mapping is the identity mapping.
 >> If you changed it, what advantages are there to your approach?
+I did not change it. 
 
                SURVEY QUESTIONS
                ================

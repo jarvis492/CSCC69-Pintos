@@ -1,6 +1,18 @@
 {
     "files.associations": {
         "inttypes.h": "c",
-        "timer.h": "c"
+        "timer.h": "c",
+        "shutdown.h": "c",
+        "interrupt.h": "c",
+        "directory.h": "c",
+        "process.h": "c",
+        "filesys.h": "c",
+        "flags.h": "c",
+        "gdt.h": "c",
+        "thread.h": "c",
+        "stdio.h": "c",
+        "vaddr.h": "c",
+        "*.inc": "c",
+        "synch.h": "c"
     }
 }
