@@ -20,10 +20,14 @@ pintos -v -k -T 60 --qemu --filesys-size=2 -p tests/userprog/args-none -a args-n
 
 make tests/userprog/sc-bad-sp.result
 make tests/userprog/sc-boundary-2.result
-make tests/userprog/create-bad-ptr.result
-make tests/userprog/exec-missing.result
-make tests/userprog/wait-simple.result
-make tests/userprog/multi-child-fd.result 
-make tests/userprog/rox-simple.result
-make tests/userprog/multi-oom.result
-make tests/userprog/bad-read2.result
+make tests/userprog/read-boundary.result
+make tests/vm/pt-write-code2.result
+make tests/vm/pt-grow-stk-sc.result
+make tests/vm/pt-grow-stk-sc.result
+make tests/vm/page-linear.result
+make tests/vm/page-merge-mm.result
+make tests/vm/page-merge-par.result
+make tests/filesys/base/syn-read.result
+make tests/vm/page-merge-stk.result
+
+cd /pintos/src/vm/build

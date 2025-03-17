@@ -8,16 +8,24 @@
 #include "userprog/gdt.h"
 #include "userprog/pagedir.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
+
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
+
+#include "vm/frame.h"
+#include "vm/page.h"
+#include "vm/swap.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -30,20 +38,27 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *fn_copy2;
   tid_t tid;
   char *save_ptr;
   char *name;
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
+  fn_copy = palloc_get_page(0);
   if (fn_copy == NULL)
+  {
+    palloc_free_page (fn_copy);
+    palloc_free_page(fn_copy2);
     return TID_ERROR;
+  }
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Use a second copy for strtok_r to avoid modifying original */
-  char *fn_copy2 = palloc_get_page(0);
-  if (fn_copy2 == NULL) {
-    palloc_free_page(fn_copy);
+  fn_copy2 = palloc_get_page(0);
+  if (fn_copy2 == NULL) 
+  {
+    palloc_free_page (fn_copy);
+    palloc_free_page(fn_copy2);
     return TID_ERROR;
   }
   strlcpy(fn_copy2, file_name, PGSIZE);
@@ -54,15 +69,16 @@ process_execute (const char *file_name)
   if (tid == TID_ERROR)
   {
     palloc_free_page (fn_copy);
+    palloc_free_page(fn_copy2);
+    return TID_ERROR;
   }
-  palloc_free_page (fn_copy2);
 
   struct wait_status *child = get_child_wait_status(tid);
   sema_down(&child->wait_sema);
   if (child->exit_status == -1)
   {
     return -1;
-  }
+  }  
   return tid;
 }
 
@@ -75,21 +91,29 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+  struct thread *cur = thread_current();
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  cur->spt = malloc(sizeof(struct hash));
+  if (cur->spt == NULL)
+    PANIC("Failed to allocate SPT!");
+  spt_init(cur->spt);
+  
+  lock_acquire(&filesys_lock);     
   success = load (file_name, &if_.eip, &if_.esp);
+  lock_release(&filesys_lock);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
   {
-    thread_current()->exit_status = -1;
+    cur->exit_status = -1;
     thread_exit();
   }
-  sema_up(&thread_current()->wait_status->wait_sema);
+  sema_up(&cur->wait_status->wait_sema); 
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -170,6 +194,34 @@ process_exit (void)
     
   }
   
+  /* Clean up supplemental page table and memory mapped files */
+  struct hash *spt = cur->spt;
+  struct hash_iterator i; 
+  hash_first(&i, spt);
+
+  while (hash_next(&i)) {
+    struct spt_entry *spte = hash_entry(hash_cur(&i), struct spt_entry, hash_elem);
+    void *kpage = pagedir_get_page(cur->pagedir, spte->upage);
+    
+    if (spte->mmapped == true) {
+      //printf("***freeing a mmapped file, spte %p type is %i\n", spte->upage, spte->location);
+      lock_acquire(&filesys_lock);
+      if (pagedir_is_dirty(cur->pagedir, spte->upage)) {
+        spte->file = file_reopen(spte->file);
+        file_write_at(spte->file, spte->upage, spte->read_bytes, spte->offset);
+      }
+      lock_release(&filesys_lock);
+    }
+    if (kpage != NULL) {
+      frame_free(kpage, false);
+    }
+    if (spte->in_swap && spte->swap_index != -1) {
+      swap_free_slot(spte->swap_index);
+      spte->swap_index = -1;
+    }
+  }
+  spt_destroy(spt);
+
   /* Clean up wait_status of exited children. */
   while (!list_empty (&thread_current()->children_statuses))
   {
@@ -311,7 +363,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
 
-
   /* extracting the args.*/
   for (token = strtok_r ((char*)file_name, " ", &save_ptr); 
        token != NULL && argc <= 64; token = strtok_r (NULL, " ", &save_ptr))
@@ -400,7 +451,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }
-
   /* Set up stack. */
   if (!setup_stack (esp, argv, argc))
     goto done;
@@ -496,30 +546,58 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
-      /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
+      // /* Get a page of memory. */
+      // uint8_t *kpage = palloc_get_page (PAL_USER);
+      // if (kpage == NULL)
+      //   return false;
+      // printf("success alloc %p to %p\n", upage, upage+PGSIZE);
+
+      // /* Load this page. */
+      // if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
+      //   {
+      //     palloc_free_page (kpage);
+      //     return false; 
+      //   }
+      // memset (kpage + page_read_bytes, 0, page_zero_bytes);
+
+      // /* Add the page to the process's address space. */
+      // if (!install_page (upage, kpage, writable)) 
+      //   {
+      //     palloc_free_page (kpage);
+      //     return false; 
+      //   }
+      
+      /* Create the a supplemental page table entry. */
+      struct spt_entry *spte = spt_alloc(upage, SPT_FILE);
+      if (spte == NULL)
+      {
         return false;
+      }
+      //printf("Mapping page: upage=%p, ofs=%d, read_bytes=%d, zero_bytes=%d\n",
+      //  upage, ofs, page_read_bytes, page_zero_bytes);
 
-      /* Load this page. */
-      if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-      memset (kpage + page_read_bytes, 0, page_zero_bytes);
-
-      /* Add the page to the process's address space. */
-      if (!install_page (upage, kpage, writable)) 
-        {
-          palloc_free_page (kpage);
-          return false; 
-        }
-
+      /* Initialize the supplemental page table entry */
+      spte->writable = writable;
+      if (page_zero_bytes == PGSIZE)
+      {
+        spte->location = SPT_MEMORY;
+        spte->swap_index = 0; 
+      }
+      else
+      {
+        spte->location = SPT_FILE;
+        spte->file = file;
+        spte->offset = ofs;
+        spte->read_bytes = page_read_bytes;
+        spte->zero_bytes = page_zero_bytes;
+        spte->swap_index = 0; 
+      }
+      
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;
       upage += PGSIZE;
+      ofs += PGSIZE;
     }
   return true;
 }
@@ -532,7 +610,13 @@ setup_stack (void **esp, char** argv, int argc)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  struct spt_entry *spte = spt_alloc(((uint8_t *) PHYS_BASE) - PGSIZE, SPT_STACK);
+  if (spte == NULL)
+  {
+    return false;
+  }
+  
+  kpage = frame_alloc (PAL_USER | PAL_ZERO, spte);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
@@ -582,7 +666,7 @@ setup_stack (void **esp, char** argv, int argc)
         //hex_dump((uintptr_t)PHYS_BASE-32, *esp, 32, true);
       }
       else
-        palloc_free_page (kpage);
+        frame_free (kpage, true);
     }
   return success;
 }

@@ -8,9 +8,7 @@
 
 >> Fill in the names and email addresses of your group members.
 
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
-FirstName LastName <email@domain.example>
+Jarvis Yu <jarvis.yu@mail.utoronto.ca>
 
 ---- PRELIMINARIES ----
 
@@ -30,24 +28,113 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct thread
+  {
+    ...
+   void* user_esp;    /* Pointer to esp for page faulting in kernel mode*/
+    ...
+   struct hash *spt;  /* Supplemental page table */
+
+    ...
+  };
+
+#define STACK_LIMIT (8 * 1024 * 1024) /* 8MB, how far below PHYS_BASE stack can grow */
+struct lock filesys_lock; /* Lock for performing filesys operations */
+
+static struct list frame_table;  // Global frame table, keep track of used frames
+
+struct lock frame_lock;   // Lock for critical frame operations
+
+// Entry to keep track of a used physical fram
+struct frame_entry {
+    void *kpage;            // Kernel virtual address of the frame
+    struct spt_entry *spte; // Pointer to corresponding supplemental page table entry
+    struct thread *owner;   // Thread that owns the frame
+    struct list_elem elem;  // List element for frame table
+};
+
+// The different locations/types of data the spt_entrys are keeping track of
+enum page_location { SPT_MEMORY, SPT_SWAP, SPT_FILE, SPT_STACK, SPT_MMAP };
+
+// Entry to keep track of supplemental info about user addresses
+struct spt_entry {
+    void *upage;               // User virtual address (page-aligned)
+    enum page_location location;  // Where the data is coming from
+
+    bool mmapped;              // If the page is memory mapped
+    struct file *file;         // File that backs this page, if any
+    off_t offset;              // Offset in the file where the page's data begins
+    size_t read_bytes;         // Number of bytes to read from the file
+    size_t zero_bytes;         // Number of bytes to zero after reading data
+    bool writable;             // Whether the page is writable
+
+    size_t swap_index;         // Index in swap if the page is swapped out
+    bool in_swap;              // If the page is swapped out
+
+    struct hash_elem hash_elem; // Element for the hash table
+};
+
+/* How many disk sectors are needed to store one page of memory */
+#define SECTORS_PER_PAGE (PGSIZE / BLOCK_SECTOR_SIZE)
+
+static struct block *swap_block; /* Pointer to the block device used for swap space */
+static struct bitmap *swap_bitmap; /* Bitmap for keeping track of swap spaces */
+static struct lock swap_lock; /* Lock for critical swap operations */
+
 ---- ALGORITHMS ----
 
 >> A2: In a few paragraphs, describe your code for accessing the data
 >> stored in the SPT about a given page.
 
+My SPT implementation uses hash tables to represent the supplemental page table. 
+The table is stored as a hash member on each thread instance and initialized using
+the hash function spt_hash which uses the user page address as a hash. 
+
+SPT entries are allocated using spt_alloc, which dynamically allocates 
+a spt_entry using malloc and initialized some of the values, then inserts
+it into the current thread's spt table using spt_insert.
+
+SPT entries are fetched using spt_lookup which needs the spt table and 
+the user page address and returns the corresponding spt entry. spt_remove 
+functions similary but for removing an entry from the given table and 
+spt_destroy deletes the given spt table entirely.
+
 >> A3: How does your code coordinate accessed and dirty bits between
 >> kernel and user virtual addresses that alias a single frame, or
 >> alternatively how do you avoid the issue?
+
+This issue is avoided by only accessing user data through the user virtual address.
+Interaction with kernel virtual addresses are generally avoided and since
+sharing was not implemented, no other aliases are needed to worry about.
 
 ---- SYNCHRONIZATION ----
 
 >> A4: When two user processes both need a new frame at the same time,
 >> how are races avoided?
 
+Races are avoided by having a global frame lock called frame_lock that 
+restricts multiple processes from performing sensitive operations at the 
+same time like frame allocation, removal and eviction for swap (eviction 
+function doesent call lock on its own but is only ever called by frame_alloc, 
+which is locked).
+
 ---- RATIONALE ----
 
 >> A5: Why did you choose the data structure(s) that you did for
 >> representing virtual-to-physical mappings?
+
+I used a global list frame_table for keeping track of physical frames. 
+Entries for the list keep track of the corresponding spte entry and the
+owning thread.
+
+I chose a list for the global frame table for its simplicity, and the fact
+that I never need to iterate over the entire table to find a certain position
+means the disadvantage of list having slow search is avoided. Furthermore, quick
+insertion and deletion of a list is advantageous for when we have to insert and 
+remove frames from the list when allocating new frames and eviction/swapping.
+
+I chose a hash table for the supplemental pages tables due to the constant need 
+for lookups, as well as fast insertions when we do allocations.
 
                PAGING TO AND FROM DISK
                =======================
@@ -58,18 +145,97 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct thread
+  {
+    ...
+   void* user_esp;    /* Pointer to esp for page faulting in kernel mode*/
+    ...
+   struct hash *spt;  /* Supplemental page table */
+
+    ...
+  };
+
+#define STACK_LIMIT (8 * 1024 * 1024) /* 8MB, how far below PHYS_BASE stack can grow */
+struct lock filesys_lock; /* Lock for performing filesys operations */
+
+static struct list frame_table;  // Global frame table, keep track of used frames
+
+struct lock frame_lock;   // Lock for critical frame operations
+
+// Entry to keep track of a used physical fram
+struct frame_entry {
+    void *kpage;            // Kernel virtual address of the frame
+    struct spt_entry *spte; // Pointer to corresponding supplemental page table entry
+    struct thread *owner;   // Thread that owns the frame
+    struct list_elem elem;  // List element for frame table
+};
+
+// The different locations/types of data the spt_entrys are keeping track of
+enum page_location { SPT_MEMORY, SPT_SWAP, SPT_FILE, SPT_STACK, SPT_MMAP };
+
+// Entry to keep track of supplemental info about user addresses
+struct spt_entry {
+    void *upage;               // User virtual address (page-aligned)
+    enum page_location location;  // Where the data is coming from
+
+    bool mmapped;              // If the page is memory mapped
+    struct file *file;         // File that backs this page, if any
+    off_t offset;              // Offset in the file where the page's data begins
+    size_t read_bytes;         // Number of bytes to read from the file
+    size_t zero_bytes;         // Number of bytes to zero after reading data
+    bool writable;             // Whether the page is writable
+
+    size_t swap_index;         // Index in swap if the page is swapped out
+    bool in_swap;              // If the page is swapped out
+
+    struct hash_elem hash_elem; // Element for the hash table
+};
+
+/* How many disk sectors are needed to store one page of memory */
+#define SECTORS_PER_PAGE (PGSIZE / BLOCK_SECTOR_SIZE)
+
+static struct block *swap_block; /* Pointer to the block device used for swap space */
+static struct bitmap *swap_bitmap; /* Bitmap for keeping track of swap spaces */
+static struct lock swap_lock; /* Lock for critical swap operations */
+
 ---- ALGORITHMS ----
 
 >> B2: When a frame is required but none is free, some frame must be
 >> evicted.  Describe your code for choosing a frame to evict.
 
+When we need to evict a frame, we call frame_evict, which will search 
+through the global frame table for the best candidate using a simple 
+form of the clock algorithm which only check the accessed bit.
+
+This version of the clock algorithm looks for the first frames that has 
+its accessed bit set to 0, setting all frames it sees on the way to 0. 
+
+Once we have the swap candidate, we check if the page is dirty, and if 
+it is, we add it to swap (or write it to file, if it was a mmap page).
+we then mark the user virtual page as not present to force a fault on 
+later accesses. 
+
 >> B3: When a process P obtains a frame that was previously used by a
 >> process Q, how do you adjust the page table (and any other data
 >> structures) to reflect the frame Q no longer has?
 
+When P obtains a frame that was previously used by a process Q during a swap,  
+first that frame's entry in the global frame table is changed to have its 
+owner changed to P and supplemental page table entry to the 
+new address that wants to use this frame in P. The old user page address
+in Q is also unmapped from the frame and its corresponding spt entry is 
+marked as being in the swap, so the process knows where to look for its data.
+
 >> B4: Explain your heuristic for deciding whether a page fault for an
 >> invalid virtual address should cause the stack to be extended into
 >> the page that faulted.
+
+I simply check if the address is greater than or equal to 32 bytes below 
+the current stack pointer, covering PUSHA and PUSH instructions and also 
+covering other cases like faults above the stack that can trigger stack 
+growth. I also check if the address is below the lowest my stack can go 
+(aka if the stack would grow beyond its limit) and if its a valis user 
+address.
 
 ---- SYNCHRONIZATION ----
 
@@ -78,21 +244,42 @@ FirstName LastName <email@domain.example>
 >> textbook for an explanation of the necessary conditions for
 >> deadlock.)
 
+I have 3 global locks for synchronization, frame_lock, filesys_lock, and swap_lock
+which lock out frame, filesystem and swap operations respectively.
+To prevent deadlocks, these locks are only ever help for the short duration 
+of the critical section, really only acquired and released in the same 
+function. Furthermore, the program aquires locks in a specific order of frame, 
+then swap or filesys, avoiding the potential issues of circular waiting.  
+
 >> B6: A page fault in process P can cause another process Q's frame
 >> to be evicted.  How do you ensure that Q cannot access or modify
 >> the page during the eviction process?  How do you avoid a race
 >> between P evicting Q's frame and Q faulting the page back in?
+
+I have a global lock for all swap and frame operations, meaning if one process P attempts
+to evict a page, it will first aquire the frame lock, then the swap lock, which means once 
+the frame is evicted, Q will not be able to allocate a new frame or try to swap the page
+back in until P is done with its eviction and swap out.
 
 >> B7: Suppose a page fault in process P causes a page to be read from
 >> the file system or swap.  How do you ensure that a second process Q
 >> cannot interfere by e.g. attempting to evict the frame while it is
 >> still being read in?
 
+We use global lock for frame operations during the process of reading 
+a page in from a file and during the eviction/swap process, meaning if 
+P is reading from the file system or swap, it aquires the frame lock and
+Q would be barred from performing an eviction until P is done reading
+
 >> B8: Explain how you handle access to paged-out pages that occur
 >> during system calls.  Do you use page faults to bring in pages (as
 >> in user programs), or do you have a mechanism for "locking" frames
 >> into physical memory, or do you use some other design?  How do you
 >> gracefully handle attempted accesses to invalid virtual addresses?
+
+I use page faults to bring in pages, checking for valid addresses in the
+page fault handler and exiting if they are not valid to make sure we dont
+attempt to access invalid memory. 
 
 ---- RATIONALE ----
 
@@ -103,6 +290,11 @@ FirstName LastName <email@domain.example>
 >> where your design falls along this continuum and why you chose to
 >> design it this way.
 
+I use a lock for each major data strucure/module that needs locking. Less
+than that I felt would be unnecessary caution and limit parallelism too much 
+and more than that I felt would be too complicated and not worth the extra 
+parallelism.
+
              MEMORY MAPPED FILES
              ===================
 
@@ -112,14 +304,76 @@ FirstName LastName <email@domain.example>
 >> `struct' member, global or static variable, `typedef', or
 >> enumeration.  Identify the purpose of each in 25 words or less.
 
+struct thread
+  {
+    ...
+   void* user_esp;    /* Pointer to esp for page faulting in kernel mode*/
+    ...
+   struct hash *spt;  /* Supplemental page table */
+
+    ...
+  };
+
+#define STACK_LIMIT (8 * 1024 * 1024) /* 8MB, how far below PHYS_BASE stack can grow */
+struct lock filesys_lock; /* Lock for performing filesys operations */
+
+static struct list frame_table;  // Global frame table, keep track of used frames
+
+struct lock frame_lock;   // Lock for critical frame operations
+
+// Entry to keep track of a used physical fram
+struct frame_entry {
+    void *kpage;            // Kernel virtual address of the frame
+    struct spt_entry *spte; // Pointer to corresponding supplemental page table entry
+    struct thread *owner;   // Thread that owns the frame
+    struct list_elem elem;  // List element for frame table
+};
+
+// The different locations/types of data the spt_entrys are keeping track of
+enum page_location { SPT_MEMORY, SPT_SWAP, SPT_FILE, SPT_STACK, SPT_MMAP };
+
+// Entry to keep track of supplemental info about user addresses
+struct spt_entry {
+    void *upage;               // User virtual address (page-aligned)
+    enum page_location location;  // Where the data is coming from
+
+    bool mmapped;              // If the page is memory mapped
+    struct file *file;         // File that backs this page, if any
+    off_t offset;              // Offset in the file where the page's data begins
+    size_t read_bytes;         // Number of bytes to read from the file
+    size_t zero_bytes;         // Number of bytes to zero after reading data
+    bool writable;             // Whether the page is writable
+
+    size_t swap_index;         // Index in swap if the page is swapped out
+    bool in_swap;              // If the page is swapped out
+
+    struct hash_elem hash_elem; // Element for the hash table
+};
+
+/* How many disk sectors are needed to store one page of memory */
+#define SECTORS_PER_PAGE (PGSIZE / BLOCK_SECTOR_SIZE)
+
+static struct block *swap_block; /* Pointer to the block device used for swap space */
+static struct bitmap *swap_bitmap; /* Bitmap for keeping track of swap spaces */
+static struct lock swap_lock; /* Lock for critical swap operations */
+
 ---- ALGORITHMS ----
 
 >> C2: Describe how memory mapped files integrate into your virtual
 >> memory subsystem.  Explain how the page fault and eviction
 >> processes differ between swap pages and other pages.
 
+Memory mapped files are allocated lazily, thus once we attempt to access 
+the address we cause a page fault, in which the handler will see it was caused
+by a memory mapped address and load in from the file. Swapping out a mmap page 
+also works differently than normal, as we write the page to its file instead of 
+to swap.
+
 >> C3: Explain how you determine whether a new file mapping overlaps
 >> any existing segment.
+When we allocate the SPT entry for the mmap file page, we attempt to
+insert into the SPT, which fails if the address already exists, which makes
+us return -1 for the memory mapped system call.
 
 ---- RATIONALE ----
 
@@ -129,6 +383,12 @@ FirstName LastName <email@domain.example>
 >> that much of their implementation can be shared.  Explain why your
 >> implementation either does or does not share much of the code for
 >> the two situations.
+
+My implementation shares a lot of members on the spt_entry between 
+mmap and executables, including file pointer and file related information
+like read_bytes and offset. The only real change is the location member, 
+which tells the program that one entry is for executables if location=SPT_FILE
+and entry is for mmap if location=SPT_MMAP
 
                SURVEY QUESTIONS
                ================

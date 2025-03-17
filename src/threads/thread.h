@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/synch.h"
+#include <hash.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,7 +25,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-#define MAX_FILES 128                   /* Max files open for a process*/
+#define MAX_FILES 256                   /* Max files open for a process*/
 
 /* A kernel thread or user process.
 
@@ -106,14 +107,16 @@ struct thread
    struct file *fd_table[MAX_FILES];   /* Store file descriptors per process */
 
    struct file *exec_file;              /* File pointer to executable of process */
-
+   
+   void* user_esp;                     /* Pointer to esp for page faulting in kernel mode*/
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
+   struct hash *spt;                   /* Supplemental page table */
 
-    /* Owned by thread.c. */
-    unsigned magic;                     /* Detects stack overflow. */
+   /* Owned by thread.c. */
+   unsigned magic;                     /* Detects stack overflow. */
   };
 
 /* represents the status of a child process, meant to be use by 

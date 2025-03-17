@@ -234,3 +234,24 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
     }
   return false;
 }
+
+void print_root_files(void) {
+  struct dir *dir = dir_open_root(); // Open root directory
+  if (dir == NULL) {
+    printf("Failed to open root directory.\n");
+    return;
+  }
+
+  struct dir_entry e;
+  size_t ofs;
+
+
+  for (ofs = 0; inode_read_at (dir->inode, &e, sizeof e, ofs) == sizeof e;
+       ofs += sizeof e) {
+    printf("File: %s\n",e.name);
+  }
+
+  return false;
+
+  dir_close(dir); // Cleanup
+}

@@ -543,6 +543,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->has_waiter = false;
   t->exit_status = 0;
   t->parent = NULL;
+  t->user_esp = NULL;
   list_init(&t->children_statuses);
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
